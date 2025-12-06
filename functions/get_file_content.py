@@ -4,15 +4,16 @@ from google.genai import types
 
 schema_get_file_content = types.FunctionDeclaration(
     name="get_file_content",
-    description="Gets the contents of a file if it exists, constrained to the working directory.",
+    description="MANDATORY: Gets the contents of a file. You MUST call this function to read source code when answering questions about how code works. Never answer 'how does X work?' without first calling get_files_info, then get_file_content to read the actual code files.",
     parameters=types.Schema(
         type=types.Type.OBJECT,
         properties={
             "file_path": types.Schema(
                 type=types.Type.STRING,
-                description="The relative path of the file in the working directory.",
+                description="The relative path of the file in the working directory. Include subdirectories if needed (e.g., 'pkg/render.py' not just 'render.py').",
             ),
         },
+        required=["file_path"],
     ),
 )
 

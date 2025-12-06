@@ -5,14 +5,16 @@ from functions.get_file_content import get_file_content
 from functions.write_file import write_file
 from functions.run_python_file import run_python_file
 
+# Module-level working directory (set by main.py)
+working_directory = "."
 
-def call_function(function_call, working_directory=".", verbose=False):
+
+def call_function(function_call, verbose=False):
     """
     Calls the appropriate function based on the function_call object.
     
     Args:
         function_call: The function call object from the Gemini API response
-        working_directory: The working directory to use for all function calls (default: current directory)
         verbose: Whether to print verbose output
     
     Returns:

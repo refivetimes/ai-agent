@@ -25,105 +25,94 @@ args = parser.parse_args()
 # Now we can access `args.prompt`
 messages = [types.Content(role="user", parts=[types.Part(text=args.user_prompt)])]
 
-
 client = genai.Client(api_key=api_key)
-response = client.models.generate_content(
-  model='gemini-2.5-flash',
-  contents=messages,
-  config=types.GenerateContentConfig(
-    tools=[available_functions], system_instruction=system_prompt
-  )
-)
-metadata = response.usage_metadata
-if metadata is None:
-  raise RuntimeError("No metadata available")
-if args.verbose:
-  prompt_tokens = metadata.prompt_token_count
-  response_tokens = metadata.candidates_token_count
-  print(f"User prompt: {args.user_prompt}")
-  print(f"Prompt tokens: {prompt_tokens}")
-  print(f"Response tokens: {response_tokens}")
 
-# Access function calls from the response
-func_calls = []
-if response.candidates:
-    for candidate in response.candidates:
-        if candidate.content and candidate.content.parts:
-            for part in candidate.content.parts:
-                # Check if this part is a function call
-                if hasattr(part, 'function_call') and part.function_call:
-                    func_calls.append(part.function_call)
+# Use current directory as working directory (could be made configurable)
+working_directory = "./calculator"
 
-if func_calls:
+# Set working directory in call_function module
+import functions.call_function as call_function_module
+call_function_module.working_directory = working_directory
+
+# Maximum iterations for the conversation loop
+max_iterations = 20
+
+def generate_content(client, messages, verbose):
     from functions.call_function import call_function
     
-    # Use current directory as working directory (could be made configurable)
-    working_directory = "./calculator"
-    
-    # Collect function responses to add to conversation
-    function_responses = []
-    function_response_data = []
-    
-    for function_call in func_calls:
-        result_content = call_function(function_call, working_directory=working_directory, verbose=args.verbose)
-        function_responses.append(result_content)
-        
-        # Capture the function response from parts[0].function_response.response
-        if not result_content.parts or len(result_content.parts) == 0:
-            raise RuntimeError(f"Function call result has no parts: {function_call.name}")
-        
-        part = result_content.parts[0]
-        if not hasattr(part, 'function_response') or not part.function_response:
-            raise RuntimeError(f"Function call result part has no function_response: {function_call.name}")
-        
-        if not hasattr(part.function_response, 'response'):
-            raise RuntimeError(f"Function call result function_response has no response attribute: {function_call.name}")
-        
-        function_response = part.function_response.response
-        function_response_data.append(function_response)
-        
-        # Print the result if verbose was set
-        if args.verbose:
-            print(f"-> {function_response}")
-    
-    # Add function responses to messages for follow-up conversation
-    messages.extend(function_responses)
-    
-    # Continue conversation with function results
     response = client.models.generate_content(
-        model='gemini-2.5-flash',
+        model="gemini-2.5-flash",
         contents=messages,
         config=types.GenerateContentConfig(
             tools=[available_functions], system_instruction=system_prompt
-        )
+        ),
     )
     
-    # Print final response
-    text_parts = []
+    if not response.usage_metadata:
+        raise RuntimeError("Gemini API response appears to be malformed")
+    
+    if verbose:
+        print("Prompt tokens:", response.usage_metadata.prompt_token_count)
+        print("Response tokens:", response.usage_metadata.candidates_token_count)
+    
+    # 1) Add model response to messages
     if response.candidates:
         for candidate in response.candidates:
-            if candidate.content and candidate.content.parts:
-                for part in candidate.content.parts:
-                    if hasattr(part, 'text') and part.text:
-                        text_parts.append(part.text)
+            if candidate.content is not None:
+                function_call_content = candidate.content
+                messages.append(function_call_content)
     
-    if text_parts:
-        print(''.join(text_parts))
-    elif hasattr(response, 'text') and response.text:
-        print(response.text)
-else:
-    # Print text response if no function calls
-    text_parts = []
-    if response.candidates:
-        for candidate in response.candidates:
-            if candidate.content and candidate.content.parts:
-                for part in candidate.content.parts:
-                    if hasattr(part, 'text') and part.text:
-                        text_parts.append(part.text)
+    # 2) If no function calls, we're done
+    if not response.function_calls:
+        # no tools to run
+        return response.text
     
-    if text_parts:
-        print(''.join(text_parts))
-    elif hasattr(response, 'text') and response.text:
-        print(response.text)
+    # 3) Execute function calls
     else:
-        print("No response text available")
+        function_responses = []
+        for function_call in response.function_calls:
+            # Always print function calls
+            print(f" - Calling function: {function_call.name}")
+            function_call_result = call_function(function_call, verbose)
+            if (
+                not function_call_result.parts
+                or not function_call_result.parts[0].function_response
+            ):
+                raise Exception("empty function call result")
+            if verbose:
+                print(f"-> {function_call_result.parts[0].function_response.response}")
+            function_responses.append(function_call_result.parts[0])
+        
+        if not function_responses:
+            raise Exception("no function responses generated, exiting.")
+        
+        # 4) Add function results as a new user message
+        messages.append(types.Content(role="user", parts=function_responses))
+        
+        # Return None to signal continuation
+        return None
+
+# Main conversation loop
+for iteration in range(max_iterations):
+    try:
+        result = generate_content(client, messages, args.verbose)
+        
+        # If result is not None, we're done - print and break
+        if result is not None:
+            print("Final response:")
+            print(result)
+            break
+        
+        # If result is None, continue the loop
+        continue
+    
+    except Exception as e:
+        print(f"Error in iteration {iteration + 1}: {str(e)}")
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
+        break
+
+# Check if we hit max iterations
+if iteration == max_iterations - 1:
+    print(f"\nReached maximum iterations ({max_iterations}). Stopping.")
